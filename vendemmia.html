@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Rapportino Vendemmia</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f6f2f4;
+    color: #2b2b2b;
+    padding: 16px;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 1.35rem;
+    color: #6d1a36;
+    text-align: center;
+    margin: 8px 0 18px;
+  }
+  .campo { margin-bottom: 16px; }
+  label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 6px;
+    font-size: 0.95rem;
+  }
+  select, input, textarea {
+    width: 100%;
+    padding: 14px 12px;
+    font-size: 1.05rem;
+    border: 1px solid #c9b8bf;
+    border-radius: 10px;
+    background: #fff;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+  select { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%236d1a36' stroke-width='3'><path d='M6 9l6 6 6-6'/></svg>"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 38px; }
+  textarea { min-height: 90px; resize: vertical; }
+  .hint {
+    font-size: 0.8rem;
+    color: #8a6b77;
+    margin-top: 4px;
+  }
+  .nascosto { display: none; }
+  button {
+    width: 100%;
+    padding: 16px;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #fff;
+    background: #6d1a36;
+    border: none;
+    border-radius: 12px;
+    margin-top: 6px;
+  }
+  button:disabled { background: #b39aa5; }
+  #esito {
+    text-align: center;
+    padding: 12px;
+    border-radius: 10px;
+    margin-top: 14px;
+    font-weight: 600;
+    display: none;
+  }
+  #esito.ok { display: block; background: #e2f3e5; color: #1c6b2d; }
+  #esito.errore { display: block; background: #fde8e8; color: #a12626; }
+  #caricamento { text-align: center; color: #8a6b77; padding: 30px 0; }
+</style>
+</head>
+<body>
+
+<h1>🍇 Rapportino Vendemmia</h1>
+
+<div id="caricamento">Caricamento liste…</div>
+
+<form id="modulo" class="nascosto" autocomplete="off">
+
+  <div class="campo">
+    <label for="data">Data</label>
+    <input type="date" id="data" required>
+  </div>
+
+  <div class="campo">
+    <label for="operatore">Operatore</label>
+    <select id="operatore" required></select>
+  </div>
+
+  <div class="campo">
+    <label for="cliente">Cliente</label>
+    <select id="cliente" required></select>
+  </div>
+
+  <div class="campo nascosto" id="blocco-vigneto">
+    <label for="vigneto">Vigneto</label>
+    <select id="vigneto"></select>
+  </div>
+
+  <div class="campo">
+    <label for="varieta">Varietà d'uva</label>
+    <select id="varieta" required></select>
+  </div>
+
+  <div class="campo">
+    <label for="mezzo">Mezzo (trattore / vendemmiatrice)</label>
+    <select id="mezzo" required></select>
+  </div>
+
+  <div class="campo">
+    <label for="ettari">Ettari vendemmiati</label>
+    <input type="number" id="ettari" inputmode="decimal" step="0.01" min="0" required>
+    <div class="hint nascosto" id="hint-ettari">Suggerito dal vigneto, modificabile</div>
+  </div>
+
+  <div class="campo">
+    <label for="combinata">In combinata con</label>
+    <select id="combinata"></select>
+  </div>
+
+  <div class="campo">
+    <label for="note">Note (anche dettate)</label>
+    <textarea id="note" placeholder="Note libere…"></textarea>
+  </div>
+
+  <button type="submit" id="invia">Invia rapportino</button>
+  <div id="esito"></div>
+</form>
+
+<script>
+// ============================================================
+// URL del deployment Apps Script (finisce con /exec)
+// Da aggiornare SOLO se si crea un NUOVO deployment.
+var API_URL = 'https://script.google.com/macros/s/AKfycbxMQFfRBo2vbmkVgUg_H1Uxy_M5LAXrny4wRdyuvLPFX3WBjlZdG3AeKYEGhh1z1ipb/exec';
+// ============================================================
+
+var ALTRO = 'Altro (spiego nelle note)';
+var dati = null;
+var ettariManuale = false;   // true se l'operatore ha digitato gli ettari a mano
+
+function el(id) { return document.getElementById(id); }
+
+function riempi(select, lista, opzioni) {
+  opzioni = opzioni || {};
+  select.innerHTML = '';
+  if (opzioni.placeholder !== false) {
+    var ph = document.createElement('option');
+    ph.value = '';
+    ph.textContent = '— scegli —';
+    ph.disabled = true;
+    ph.selected = true;
+    select.appendChild(ph);
+  }
+  (opzioni.prima || []).concat(lista).forEach(function (v) {
+    var o = document.createElement('option');
+    o.value = v;
+    o.textContent = v;
+    select.appendChild(o);
+  });
+  var altro = document.createElement('option');
+  altro.value = ALTRO;
+  altro.textContent = ALTRO;
+  select.appendChild(altro);
+}
+
+// ---------- caricamento liste ----------
+fetch(API_URL + '?action=data')
+  .then(function (r) { return r.json(); })
+  .then(function (d) {
+    dati = d;
+    riempi(el('operatore'), d.operatori);
+    riempi(el('cliente'), d.clienti);
+    riempi(el('varieta'), d.varieta);
+    riempi(el('mezzo'), d.mezzi);
+
+    // Combinata: default "No (da solo)", niente placeholder obbligatorio
+    var selC = el('combinata');
+    selC.innerHTML = '';
+    var no = document.createElement('option');
+    no.value = 'No (da solo)';
+    no.textContent = 'No (da solo)';
+    no.selected = true;
+    selC.appendChild(no);
+    (d.combinate || []).forEach(function (v) {
+      var o = document.createElement('option');
+      o.value = v;
+      o.textContent = v;
+      selC.appendChild(o);
+    });
+    var altro = document.createElement('option');
+    altro.value = ALTRO;
+    altro.textContent = ALTRO;
+    selC.appendChild(altro);
+
+    el('data').value = new Date().toISOString().slice(0, 10);
+    el('caricamento').classList.add('nascosto');
+    el('modulo').classList.remove('nascosto');
+  })
+  .catch(function () {
+    el('caricamento').textContent =
+      'Errore nel caricamento. Controlla la connessione e riapri la pagina.';
+  });
+
+// ---------- vigneto legato al cliente ----------
+el('cliente').addEventListener('change', function () {
+  var cliente = this.value;
+  var lista = (dati.vigneti && dati.vigneti[cliente]) || [];
+  var blocco = el('blocco-vigneto');
+  var selV = el('vigneto');
+
+  if (lista.length === 0) {
+    blocco.classList.add('nascosto');
+    selV.innerHTML = '';
+    selV.required = false;
+  } else {
+    riempi(selV, lista.map(function (v) { return v.nome; }));
+    blocco.classList.remove('nascosto');
+    selV.required = true;
+  }
+  aggiornaSuggerimentoEttari();
+});
+
+el('vigneto').addEventListener('change', aggiornaSuggerimentoEttari);
+
+el('ettari').addEventListener('input', function () {
+  ettariManuale = this.value !== '';
+});
+
+function aggiornaSuggerimentoEttari() {
+  if (ettariManuale) return; // non sovrascrivo quello digitato a mano
+  var cliente = el('cliente').value;
+  var nomeV = el('vigneto').value;
+  var lista = (dati.vigneti && dati.vigneti[cliente]) || [];
+  var v = lista.filter(function (x) { return x.nome === nomeV; })[0];
+  if (v && v.ettari != null) {
+    el('ettari').value = v.ettari;
+    el('hint-ettari').classList.remove('nascosto');
+  } else {
+    el('ettari').value = '';
+    el('hint-ettari').classList.add('nascosto');
+  }
+}
+
+// ---------- invio ----------
+el('modulo').addEventListener('submit', function (ev) {
+  ev.preventDefault();
+  var btn = el('invia');
+  var esito = el('esito');
+  btn.disabled = true;
+  btn.textContent = 'Invio in corso…';
+  esito.className = '';
+  esito.style.display = 'none';
+
+  var rapportino = {
+    data: el('data').value,
+    operatore: el('operatore').value,
+    cliente: el('cliente').value,
+    vigneto: el('vigneto').required ? el('vigneto').value : '',
+    varieta: el('varieta').value,
+    mezzo: el('mezzo').value,
+    ettari: el('ettari').value,
+    combinata: el('combinata').value,
+    note: el('note').value.trim()
+  };
+
+  // POST senza header particolari: niente preflight, funziona con Apps Script
+  fetch(API_URL, { method: 'POST', body: JSON.stringify(rapportino) })
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (!r.ok) throw new Error(r.errore || 'errore');
+      esito.textContent = '✔ Rapportino inviato!';
+      esito.className = 'ok';
+      // pronto per il prossimo: tengo data e operatore
+      el('cliente').selectedIndex = 0;
+      el('blocco-vigneto').classList.add('nascosto');
+      el('vigneto').required = false;
+      el('varieta').selectedIndex = 0;
+      el('mezzo').selectedIndex = 0;
+      el('ettari').value = '';
+      el('hint-ettari').classList.add('nascosto');
+      el('combinata').selectedIndex = 0;
+      el('note').value = '';
+      ettariManuale = false;
+      window.scrollTo(0, 0);
+    })
+    .catch(function () {
+      esito.textContent = 'Invio non riuscito. Riprova.';
+      esito.className = 'errore';
+    })
+    .finally(function () {
+      btn.disabled = false;
+      btn.textContent = 'Invia rapportino';
+    });
+});
+</script>
+</body>
+</html>
