@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
 <title>Rapportino Trasporti Uva</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -53,7 +54,7 @@
     margin-top: 6px;
   }
   button:disabled { background: #9db3aa; }
-  #azzera {
+  button.secondario {
     background: none;
     color: #6b8279;
     font-size: 0.9rem;
@@ -62,22 +63,6 @@
     text-decoration: underline;
     margin-top: 2px;
   }
-  /* Il messaggio di conferma resta incollato in fondo allo schermo:
-     su un modulo lungo, altrimenti, finisce fuori dalla vista. */
-  #esito {
-    position: fixed;
-    left: 0; right: 0; bottom: 0;
-    text-align: center;
-    padding: 16px 12px;
-    font-weight: 700;
-    font-size: 1.05rem;
-    box-shadow: 0 -2px 12px rgba(0,0,0,.12);
-    display: none;
-    z-index: 10;
-  }
-  #esito.ok { display: block; background: #e2f3e5; color: #1c6b2d; }
-  #esito.errore { display: block; background: #fde8e8; color: #a12626; }
-  #caricamento { text-align: center; color: #6b8279; padding: 30px 0; }
   #contatore {
     text-align: center;
     font-size: 0.85rem;
@@ -85,6 +70,45 @@
     margin: -8px 0 14px;
     min-height: 1.2em;
   }
+
+  /* ---------- pannello di conferma / errore ---------- */
+  .pannello { border-radius: 14px; padding: 18px 14px; }
+  .pannello.ok { background: #e2f3e5; border: 2px solid #1c6b2d; }
+  .pannello.ko { background: #fde8e8; border: 2px solid #a12626; }
+  .p-titolo { text-align: center; font-size: 1.25rem; font-weight: 800; }
+  .pannello.ok .p-titolo { color: #1c6b2d; }
+  .pannello.ko .p-titolo { color: #a12626; }
+  .p-numero {
+    text-align: center;
+    font-size: 1.55rem;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    margin: 12px 0 2px;
+    color: #14421f;
+  }
+  .p-ora { text-align: center; font-size: 0.95rem; color: #3c5a43; margin-bottom: 14px; }
+  .p-testo { text-align: center; font-size: 1rem; margin: 10px 0 4px; }
+  .riepilogo {
+    width: 100%;
+    border-collapse: collapse;
+    background: #fff;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .riepilogo td { padding: 9px 10px; border-bottom: 1px solid #ececec; font-size: 0.95rem; vertical-align: top; }
+  .riepilogo tr:last-child td { border-bottom: none; }
+  .riepilogo td.k { color: #5c5c5c; width: 42%; }
+  .riepilogo td.v { font-weight: 700; word-break: break-word; }
+  .p-nota { text-align: center; font-size: 0.85rem; color: #4a5c4e; margin-top: 12px; }
+  .p-lista { margin-top: 14px; font-size: 0.85rem; color: #3c5a43; }
+  .p-lista b { display: block; margin-bottom: 4px; }
+  .p-lista div.v { padding: 2px 0; }
+  .pannello.ok button { background: #1c6b2d; }
+  .pannello.ko button { background: #a12626; }
+  .pannello.ok button.secondario { background: none; color: #3c5a43; }
+  .pannello.ko button.secondario { background: none; color: #a12626; }
+
+  #caricamento { text-align: center; color: #6b8279; padding: 30px 0; }
 </style>
 </head>
 <body>
@@ -144,9 +168,11 @@
   </div>
 
   <button type="submit" id="invia">Invia trasporto</button>
-  <button type="button" id="azzera">Svuota tutto e ricomincia</button>
-  <div id="esito"></div>
+  <button type="button" id="azzera" class="secondario">Svuota tutto e ricomincia</button>
 </form>
+
+<!-- Pannello che compare AL POSTO del modulo dopo l'invio -->
+<div id="pannello" class="pannello nascosto"></div>
 
 <script>
 // ============================================================
@@ -156,8 +182,7 @@ var API_URL = 'https://script.google.com/macros/s/AKfycbwFxoChLKvcKhhRhFDZiE9Zk9
 // ============================================================
 
 var ALTRO = 'Altro (spiego nelle note)';
-var inviati = 0;
-var timerEsito = null;
+var registrati = [];   // viaggi confermati da quando si è aperta la pagina
 
 function el(id) { return document.getElementById(id); }
 
@@ -170,6 +195,18 @@ function oggi() {
   if (m.length < 2) m = '0' + m;
   if (g.length < 2) g = '0' + g;
   return d.getFullYear() + '-' + m + '-' + g;
+}
+
+// Codice unico di questo invio: se l'autista preme "Riprova" dopo un errore
+// di rete, il server lo riconosce e NON scrive il viaggio due volte.
+function nuovoIdInvio() {
+  return 't' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
+}
+
+function dataItaliana(iso) {
+  if (!iso) return '';
+  var p = String(iso).split('-');
+  return p.length === 3 ? p[2] + '/' + p[1] + '/' + p[0] : iso;
 }
 
 function riempi(select, lista) {
@@ -192,6 +229,13 @@ function riempi(select, lista) {
   select.appendChild(altro);
 }
 
+function aggiornaContatore() {
+  el('contatore').textContent = registrati.length === 0 ? '' :
+    (registrati.length === 1
+      ? '1 viaggio registrato da quando hai aperto la pagina'
+      : registrati.length + ' viaggi registrati da quando hai aperto la pagina');
+}
+
 // ---------- caricamento liste ----------
 fetch(API_URL + '?action=data')
   .then(function (r) { return r.json(); })
@@ -212,19 +256,207 @@ fetch(API_URL + '?action=data')
       'Errore nel caricamento. Controlla la connessione e riapri la pagina.';
   });
 
+// ---------- costruzione dei pannelli ----------
+function svuota(nodo) { while (nodo.firstChild) nodo.removeChild(nodo.firstChild); }
+
+function riga(tab, chiave, valore) {
+  if (valore === '' || valore == null) return;
+  var tr = document.createElement('tr');
+  var td1 = document.createElement('td');
+  td1.className = 'k';
+  td1.textContent = chiave;
+  var td2 = document.createElement('td');
+  td2.className = 'v';
+  td2.textContent = valore;   // textContent: niente sorprese se le note contengono simboli
+  tr.appendChild(td1);
+  tr.appendChild(td2);
+  tab.appendChild(tr);
+}
+
+function mostraPannello() {
+  el('modulo').classList.add('nascosto');
+  el('pannello').classList.remove('nascosto');
+  window.scrollTo(0, 0);
+}
+
+function tornaAlModulo() {
+  el('pannello').className = 'pannello nascosto';
+  el('modulo').classList.remove('nascosto');
+  window.scrollTo(0, 0);
+}
+
+function mostraConferma(risposta, d) {
+  var p = el('pannello');
+  svuota(p);
+  p.className = 'pannello ok';
+
+  var t = document.createElement('div');
+  t.className = 'p-titolo';
+  t.textContent = risposta.giaRegistrato
+    ? '✔ Era già registrato'
+    : '✔ Trasporto registrato';
+  p.appendChild(t);
+
+  if (risposta.numero) {
+    var n = document.createElement('div');
+    n.className = 'p-numero';
+    n.textContent = risposta.numero;
+    p.appendChild(n);
+  }
+
+  var o = document.createElement('div');
+  o.className = 'p-ora';
+  o.textContent = risposta.orario
+    ? 'Salvato il ' + risposta.orario
+    : 'Salvato correttamente';
+  p.appendChild(o);
+
+  var tab = document.createElement('table');
+  tab.className = 'riepilogo';
+  riga(tab, 'Data', dataItaliana(d.data));
+  riga(tab, 'Cliente', d.cliente);
+  riga(tab, 'Varietà', d.varieta);
+  riga(tab, 'Operatore', d.operatore);
+  riga(tab, 'Trattore', d.trattore);
+  riga(tab, 'Rimorchio', d.rimorchio);
+  riga(tab, 'Destinazione', d.destinazione);
+  riga(tab, 'Quintali', d.quintali);
+  riga(tab, 'Note', d.note);
+  p.appendChild(tab);
+
+  // elenco dei viaggi già confermati in questa sessione: una piccola "ricevuta"
+  if (registrati.length > 1) {
+    var box = document.createElement('div');
+    box.className = 'p-lista';
+    var tit = document.createElement('b');
+    tit.textContent = 'Viaggi registrati da quando hai aperto la pagina:';
+    box.appendChild(tit);
+    registrati.forEach(function (v) {
+      var r = document.createElement('div');
+      r.className = 'v';
+      r.textContent = '• ' + (v.numero || '—') + ' — ' + v.quintali + ' q.li a ' + v.destinazione;
+      box.appendChild(r);
+    });
+    p.appendChild(box);
+  }
+
+  var nota = document.createElement('div');
+  nota.className = 'p-nota';
+  nota.textContent = 'Se vuoi tenerne traccia, fai uno screenshot di questa schermata.';
+  p.appendChild(nota);
+
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = 'Nuovo viaggio';
+  btn.addEventListener('click', function () {
+    // tengo data, cliente, varietà, operatore, trattore, rimorchio e destinazione
+    el('quintali').value = '';
+    el('note').value = '';
+    tornaAlModulo();
+    el('quintali').focus();
+  });
+  p.appendChild(btn);
+
+  var btn2 = document.createElement('button');
+  btn2.type = 'button';
+  btn2.className = 'secondario';
+  btn2.textContent = 'Nuovo viaggio cambiando cliente o destinazione';
+  btn2.addEventListener('click', function () {
+    ['cliente', 'varieta', 'operatore', 'trattore', 'rimorchio', 'destinazione']
+      .forEach(function (id) { el(id).selectedIndex = 0; });
+    el('quintali').value = '';
+    el('note').value = '';
+    tornaAlModulo();
+  });
+  p.appendChild(btn2);
+
+  mostraPannello();
+}
+
+function mostraErrore(messaggio, d) {
+  var p = el('pannello');
+  svuota(p);
+  p.className = 'pannello ko';
+
+  var t = document.createElement('div');
+  t.className = 'p-titolo';
+  t.textContent = '✕ NON registrato';
+  p.appendChild(t);
+
+  var m = document.createElement('div');
+  m.className = 'p-testo';
+  m.textContent = messaggio;
+  p.appendChild(m);
+
+  var nota = document.createElement('div');
+  nota.className = 'p-nota';
+  nota.textContent = 'I dati che hai compilato non sono andati persi. ' +
+    'Premi "Riprova invio": se per caso era già arrivato, non verrà registrato due volte.';
+  p.appendChild(nota);
+
+  var btn = document.createElement('button');
+  btn.type = 'button';
+  btn.textContent = 'Riprova invio';
+  btn.addEventListener('click', function () { invia(d); });
+  p.appendChild(btn);
+
+  var btn2 = document.createElement('button');
+  btn2.type = 'button';
+  btn2.className = 'secondario';
+  btn2.textContent = 'Torna al modulo e correggi';
+  btn2.addEventListener('click', tornaAlModulo);
+  p.appendChild(btn2);
+
+  mostraPannello();
+}
+
+function mostraAttesa() {
+  var p = el('pannello');
+  svuota(p);
+  p.className = 'pannello ok';
+  var t = document.createElement('div');
+  t.className = 'p-titolo';
+  t.textContent = 'Invio in corso…';
+  p.appendChild(t);
+  var m = document.createElement('div');
+  m.className = 'p-testo';
+  m.textContent = 'Aspetta la conferma prima di chiudere la pagina.';
+  p.appendChild(m);
+  mostraPannello();
+}
+
 // ---------- invio ----------
+function invia(d) {
+  mostraAttesa();
+
+  // POST senza header particolari: niente preflight, funziona con Apps Script
+  fetch(API_URL, { method: 'POST', body: JSON.stringify(d) })
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (!r || !r.ok) throw new Error((r && r.errore) || 'errore');
+      // se è un "Riprova" andato a buon fine, non conto due volte lo stesso viaggio
+      var gia = registrati.some(function (v) { return v.idInvio === d.idInvio; });
+      if (!gia) {
+        registrati.push({
+          idInvio: d.idInvio,
+          numero: r.numero,
+          quintali: d.quintali,
+          destinazione: d.destinazione
+        });
+      }
+      aggiornaContatore();
+      mostraConferma(r, d);
+    })
+    .catch(function () {
+      mostraErrore('Il trasporto non risulta salvato: ' +
+        'la connessione è mancata o il server non ha risposto.', d);
+    });
+}
+
 el('modulo').addEventListener('submit', function (ev) {
   ev.preventDefault();
-  var btn = el('invia');
-  var esito = el('esito');
-  btn.disabled = true;
-  btn.textContent = 'Invio in corso…';
-  esito.className = ''; // nascosto: ci pensa il CSS, niente style inline
-                        // (uno style="display:none" batterebbe la regola .ok
-                        //  e il messaggio verde non si vedrebbe mai)
-  if (timerEsito) clearTimeout(timerEsito);
-
-  var trasporto = {
+  invia({
+    idInvio: nuovoIdInvio(),
     data: el('data').value,
     cliente: el('cliente').value,
     varieta: el('varieta').value,
@@ -234,36 +466,7 @@ el('modulo').addEventListener('submit', function (ev) {
     destinazione: el('destinazione').value,
     quintali: el('quintali').value,
     note: el('note').value.trim()
-  };
-
-  // POST senza header particolari: niente preflight, funziona con Apps Script
-  fetch(API_URL, { method: 'POST', body: JSON.stringify(trasporto) })
-    .then(function (r) { return r.json(); })
-    .then(function (r) {
-      if (!r.ok) throw new Error(r.errore || 'errore');
-      inviati++;
-      esito.textContent = '✔ Trasporto inviato — ' + trasporto.quintali +
-        ' q.li a ' + trasporto.destinazione;
-      esito.className = 'ok';
-      el('contatore').textContent = inviati === 1
-        ? '1 viaggio inviato da quando hai aperto la pagina'
-        : inviati + ' viaggi inviati da quando hai aperto la pagina';
-      // pronto per il viaggio successivo: tengo data, cliente, varietà,
-      // operatore, trattore, rimorchio e destinazione (di solito si ripetono)
-      el('quintali').value = '';
-      el('note').value = '';
-      el('quintali').focus();
-      // la conferma verde sparisce da sola dopo 5 secondi
-      timerEsito = setTimeout(function () { esito.className = ''; }, 5000);
-    })
-    .catch(function () {
-      esito.textContent = 'Invio non riuscito. Riprova.';
-      esito.className = 'errore';
-    })
-    .finally(function () {
-      btn.disabled = false;
-      btn.textContent = 'Invia trasporto';
-    });
+  });
 });
 
 // ---------- svuota tutto (cambio cliente / nuova giornata) ----------
@@ -273,9 +476,8 @@ el('azzera').addEventListener('click', function () {
   el('quintali').value = '';
   el('note').value = '';
   el('data').value = oggi();
-  el('esito').className = '';
-  el('contatore').textContent = '';
-  inviati = 0;
+  registrati = [];
+  aggiornaContatore();
   window.scrollTo(0, 0);
 });
 </script>
