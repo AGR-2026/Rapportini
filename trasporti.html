@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>Rapportino Trasporti Uva</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #f1f5f2;
+    color: #2b2b2b;
+    padding: 16px;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+  h1 {
+    font-size: 1.35rem;
+    color: #1d5c4b;
+    text-align: center;
+    margin: 8px 0 18px;
+  }
+  .campo { margin-bottom: 16px; }
+  label {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 6px;
+    font-size: 0.95rem;
+  }
+  select, input, textarea {
+    width: 100%;
+    padding: 14px 12px;
+    font-size: 1.05rem;
+    border: 1px solid #b8c9c0;
+    border-radius: 10px;
+    background: #fff;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+  select { background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%231d5c4b' stroke-width='3'><path d='M6 9l6 6 6-6'/></svg>"); background-repeat: no-repeat; background-position: right 12px center; padding-right: 38px; }
+  textarea { min-height: 90px; resize: vertical; }
+  .hint { font-size: 0.8rem; color: #6b8279; margin-top: 4px; }
+  .nascosto { display: none; }
+  button {
+    width: 100%;
+    padding: 16px;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: #fff;
+    background: #1d5c4b;
+    border: none;
+    border-radius: 12px;
+    margin-top: 6px;
+  }
+  button:disabled { background: #9db3aa; }
+  #azzera {
+    background: none;
+    color: #6b8279;
+    font-size: 0.9rem;
+    font-weight: 600;
+    padding: 12px;
+    text-decoration: underline;
+    margin-top: 2px;
+  }
+  /* Il messaggio di conferma resta incollato in fondo allo schermo:
+     su un modulo lungo, altrimenti, finisce fuori dalla vista. */
+  #esito {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    text-align: center;
+    padding: 16px 12px;
+    font-weight: 700;
+    font-size: 1.05rem;
+    box-shadow: 0 -2px 12px rgba(0,0,0,.12);
+    display: none;
+    z-index: 10;
+  }
+  #esito.ok { display: block; background: #e2f3e5; color: #1c6b2d; }
+  #esito.errore { display: block; background: #fde8e8; color: #a12626; }
+  #caricamento { text-align: center; color: #6b8279; padding: 30px 0; }
+  #contatore {
+    text-align: center;
+    font-size: 0.85rem;
+    color: #6b8279;
+    margin: -8px 0 14px;
+    min-height: 1.2em;
+  }
+</style>
+</head>
+<body>
+
+<h1>🚜 Rapportino Trasporti Uva</h1>
+
+<div id="caricamento">Caricamento liste…</div>
+
+<div id="contatore"></div>
+
+<form id="modulo" class="nascosto" autocomplete="off">
+
+  <div class="campo">
+    <label for="data">Data</label>
+    <input type="date" id="data" required>
+  </div>
+
+  <div class="campo">
+    <label for="cliente">Cliente</label>
+    <select id="cliente" required></select>
+  </div>
+
+  <div class="campo">
+    <label for="varieta">Varietà d'uva</label>
+    <select id="varieta" required></select>
+  </div>
+
+  <div class="campo">
+    <label for="operatore">Operatore</label>
+    <select id="operatore" required></select>
+  </div>
+
+  <div class="campo">
+    <label for="trattore">Trattore</label>
+    <select id="trattore" required></select>
+  </div>
+
+  <div class="campo">
+    <label for="rimorchio">Rimorchio</label>
+    <select id="rimorchio" required></select>
+  </div>
+
+  <div class="campo">
+    <label for="destinazione">Destinazione</label>
+    <select id="destinazione" required></select>
+  </div>
+
+  <div class="campo">
+    <label for="quintali">Quintali</label>
+    <input type="number" id="quintali" inputmode="decimal" step="0.1" min="0" required>
+    <div class="hint">Dopo l'invio restano impostati cliente, varietà, operatore, trattore, rimorchio e destinazione: per il viaggio dopo basta rimettere i quintali.</div>
+  </div>
+
+  <div class="campo">
+    <label for="note">Note (anche dettate)</label>
+    <textarea id="note" placeholder="Note libere…"></textarea>
+  </div>
+
+  <button type="submit" id="invia">Invia trasporto</button>
+  <button type="button" id="azzera">Svuota tutto e ricomincia</button>
+  <div id="esito"></div>
+</form>
+
+<script>
+// ============================================================
+// URL del deployment Apps Script (finisce con /exec)
+// Da aggiornare SOLO se si crea un NUOVO deployment.
+var API_URL = 'https://script.google.com/macros/s/AKfycbwFxoChLKvcKhhRhFDZiE9Zk9iNIcGADG-ZdHMBGh5vWdsBxIwQ23Ypf_ZLRTky-y-JKQ/exec';
+// ============================================================
+
+var ALTRO = 'Altro (spiego nelle note)';
+var inviati = 0;
+var timerEsito = null;
+
+function el(id) { return document.getElementById(id); }
+
+// Data di OGGI secondo l'orologio del telefono.
+// (toISOString darebbe l'ora di Londra: dopo mezzanotte scriverebbe ieri)
+function oggi() {
+  var d = new Date();
+  var m = String(d.getMonth() + 1);
+  var g = String(d.getDate());
+  if (m.length < 2) m = '0' + m;
+  if (g.length < 2) g = '0' + g;
+  return d.getFullYear() + '-' + m + '-' + g;
+}
+
+function riempi(select, lista) {
+  select.innerHTML = '';
+  var ph = document.createElement('option');
+  ph.value = '';
+  ph.textContent = '— scegli —';
+  ph.disabled = true;
+  ph.selected = true;
+  select.appendChild(ph);
+  (lista || []).forEach(function (v) {
+    var o = document.createElement('option');
+    o.value = v;
+    o.textContent = v;
+    select.appendChild(o);
+  });
+  var altro = document.createElement('option');
+  altro.value = ALTRO;
+  altro.textContent = ALTRO;
+  select.appendChild(altro);
+}
+
+// ---------- caricamento liste ----------
+fetch(API_URL + '?action=data')
+  .then(function (r) { return r.json(); })
+  .then(function (d) {
+    riempi(el('cliente'), d.clienti);
+    riempi(el('varieta'), d.varieta);
+    riempi(el('operatore'), d.operatori);
+    riempi(el('trattore'), d.trattori);
+    riempi(el('rimorchio'), d.rimorchi);
+    riempi(el('destinazione'), d.destinazioni);
+
+    el('data').value = oggi();
+    el('caricamento').classList.add('nascosto');
+    el('modulo').classList.remove('nascosto');
+  })
+  .catch(function () {
+    el('caricamento').textContent =
+      'Errore nel caricamento. Controlla la connessione e riapri la pagina.';
+  });
+
+// ---------- invio ----------
+el('modulo').addEventListener('submit', function (ev) {
+  ev.preventDefault();
+  var btn = el('invia');
+  var esito = el('esito');
+  btn.disabled = true;
+  btn.textContent = 'Invio in corso…';
+  esito.className = ''; // nascosto: ci pensa il CSS, niente style inline
+                        // (uno style="display:none" batterebbe la regola .ok
+                        //  e il messaggio verde non si vedrebbe mai)
+  if (timerEsito) clearTimeout(timerEsito);
+
+  var trasporto = {
+    data: el('data').value,
+    cliente: el('cliente').value,
+    varieta: el('varieta').value,
+    operatore: el('operatore').value,
+    trattore: el('trattore').value,
+    rimorchio: el('rimorchio').value,
+    destinazione: el('destinazione').value,
+    quintali: el('quintali').value,
+    note: el('note').value.trim()
+  };
+
+  // POST senza header particolari: niente preflight, funziona con Apps Script
+  fetch(API_URL, { method: 'POST', body: JSON.stringify(trasporto) })
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (!r.ok) throw new Error(r.errore || 'errore');
+      inviati++;
+      esito.textContent = '✔ Trasporto inviato — ' + trasporto.quintali +
+        ' q.li a ' + trasporto.destinazione;
+      esito.className = 'ok';
+      el('contatore').textContent = inviati === 1
+        ? '1 viaggio inviato da quando hai aperto la pagina'
+        : inviati + ' viaggi inviati da quando hai aperto la pagina';
+      // pronto per il viaggio successivo: tengo data, cliente, varietà,
+      // operatore, trattore, rimorchio e destinazione (di solito si ripetono)
+      el('quintali').value = '';
+      el('note').value = '';
+      el('quintali').focus();
+      // la conferma verde sparisce da sola dopo 5 secondi
+      timerEsito = setTimeout(function () { esito.className = ''; }, 5000);
+    })
+    .catch(function () {
+      esito.textContent = 'Invio non riuscito. Riprova.';
+      esito.className = 'errore';
+    })
+    .finally(function () {
+      btn.disabled = false;
+      btn.textContent = 'Invia trasporto';
+    });
+});
+
+// ---------- svuota tutto (cambio cliente / nuova giornata) ----------
+el('azzera').addEventListener('click', function () {
+  ['cliente', 'varieta', 'operatore', 'trattore', 'rimorchio', 'destinazione']
+    .forEach(function (id) { el(id).selectedIndex = 0; });
+  el('quintali').value = '';
+  el('note').value = '';
+  el('data').value = oggi();
+  el('esito').className = '';
+  el('contatore').textContent = '';
+  inviati = 0;
+  window.scrollTo(0, 0);
+});
+</script>
+</body>
+</html>
