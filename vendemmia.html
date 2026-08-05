@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#6d1a36">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Vendemmia">
+<link rel="manifest" href="manifest-vendemmia.json">
+<link rel="apple-touch-icon" href="icona-vendemmia.png">
 <title>Rapportino Vendemmia</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -19,7 +26,7 @@
     font-size: 1.35rem;
     color: #6d1a36;
     text-align: center;
-    margin: 8px 0 18px;
+    margin: 8px 0 14px;
   }
   .campo { margin-bottom: 16px; }
   label {
@@ -60,13 +67,26 @@
     text-decoration: underline;
     padding: 12px;
   }
+  button.piccolo { font-size: 0.95rem; padding: 10px; margin-top: 8px; }
 
-  /* ---------- pannello di conferma / errore ---------- */
+  /* ---------- barra di stato (coda) ---------- */
+  #stato { border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; font-size: 0.92rem; }
+  #stato.attesa { background: #fff4d6; border: 1px solid #d8a800; color: #6b4e00; }
+  #stato.inviato { background: #e2f3e5; border: 1px solid #1c6b2d; color: #1c6b2d; }
+  #stato.guasto { background: #fde8e8; border: 1px solid #a12626; color: #a12626; }
+  #stato b { display: block; margin-bottom: 2px; }
+  #stato button { background: #6b4e00; }
+  #stato.guasto button { background: #a12626; }
+  #avvisoListe { font-size: 0.82rem; color: #8a6b77; text-align: center; margin-bottom: 12px; }
+
+  /* ---------- pannello di conferma / attesa / errore ---------- */
   .pannello { border-radius: 14px; padding: 18px 14px; }
   .pannello.ok { background: #e2f3e5; border: 2px solid #1c6b2d; }
+  .pannello.attesa { background: #fff4d6; border: 2px solid #d8a800; }
   .pannello.ko { background: #fde8e8; border: 2px solid #a12626; }
   .p-titolo { text-align: center; font-size: 1.25rem; font-weight: 800; }
   .pannello.ok .p-titolo { color: #1c6b2d; }
+  .pannello.attesa .p-titolo { color: #6b4e00; }
   .pannello.ko .p-titolo { color: #a12626; }
   .p-numero {
     text-align: center;
@@ -77,7 +97,8 @@
     color: #14421f;
   }
   .p-ora { text-align: center; font-size: 0.95rem; color: #3c5a43; margin-bottom: 14px; }
-  .p-testo { text-align: center; font-size: 1rem; margin: 10px 0 4px; }
+  .pannello.attesa .p-ora { color: #6b4e00; }
+  .p-testo { text-align: center; font-size: 1rem; margin: 10px 0 12px; }
   .riepilogo {
     width: 100%;
     border-collapse: collapse;
@@ -90,9 +111,12 @@
   .riepilogo td.k { color: #5c5c5c; width: 42%; }
   .riepilogo td.v { font-weight: 700; word-break: break-word; }
   .p-nota { text-align: center; font-size: 0.85rem; color: #4a5c4e; margin-top: 12px; }
+  .pannello.attesa .p-nota { color: #6b4e00; }
   .pannello.ok button { background: #1c6b2d; }
+  .pannello.attesa button { background: #8a6500; }
   .pannello.ko button { background: #a12626; }
   .pannello.ko button.secondario { background: none; color: #a12626; }
+  .pannello.attesa button.secondario { background: none; color: #6b4e00; }
 
   #caricamento { text-align: center; color: #8a6b77; padding: 30px 0; }
 </style>
@@ -101,7 +125,9 @@
 
 <h1>🍇 Rapportino Vendemmia</h1>
 
+<div id="stato" class="nascosto"></div>
 <div id="caricamento">Caricamento liste…</div>
+<div id="avvisoListe" class="nascosto"></div>
 
 <form id="modulo" class="nascosto" autocomplete="off">
 
@@ -159,10 +185,41 @@ var API_URL = 'https://script.google.com/macros/s/AKfycbzjK9mzECXQOIM6yWiD75Wx1G
 // ============================================================
 
 var ALTRO = 'Altro (spiego nelle note)';
-var ultimoInvio = null;   // { dati: {...} } dell'ultimo tentativo, per il pulsante "Riprova"
+var K_CODA = 'vendemmia_coda';        // rapportini compilati e non ancora arrivati a Google
+var K_LISTE = 'vendemmia_liste';      // ultime tendine scaricate (per aprire senza rete)
+var K_STORICO = 'vendemmia_storico';  // ultimi rapportini confermati, con il loro numero
 
 function el(id) { return document.getElementById(id); }
 
+// ---------- memoria del telefono ----------
+// Se il browser non la concede (navigazione privata), si continua a lavorare in
+// memoria volatile: la pagina avvisa che la coda dura solo finché resta aperta.
+var HA_MEMORIA = (function () {
+  try {
+    localStorage.setItem('__prova__', '1');
+    localStorage.removeItem('__prova__');
+    return true;
+  } catch (e) { return false; }
+})();
+var memoriaVolatile = {};
+
+function leggi(chiave, seVuoto) {
+  try {
+    if (HA_MEMORIA) {
+      var v = localStorage.getItem(chiave);
+      return v ? JSON.parse(v) : seVuoto;
+    }
+  } catch (e) { /* cado sotto */ }
+  return (chiave in memoriaVolatile) ? memoriaVolatile[chiave] : seVuoto;
+}
+
+function scrivi(chiave, valore) {
+  memoriaVolatile[chiave] = valore;
+  if (!HA_MEMORIA) return;
+  try { localStorage.setItem(chiave, JSON.stringify(valore)); } catch (e) { /* pieno: resta in memoria */ }
+}
+
+// ---------- utilità ----------
 // Data di OGGI secondo l'orologio del telefono.
 // (toISOString darebbe l'ora di Londra: dopo mezzanotte scriverebbe ieri)
 function oggi() {
@@ -174,8 +231,15 @@ function oggi() {
   return d.getFullYear() + '-' + m + '-' + g;
 }
 
-// Codice unico di questo invio: se l'operatore preme "Riprova" dopo un errore
-// di rete, il server lo riconosce e NON scrive il rapportino due volte.
+function oraLocale(d) {
+  d = d || new Date();
+  function due(n) { return (n < 10 ? '0' : '') + n; }
+  return due(d.getDate()) + '/' + due(d.getMonth() + 1) + '/' + d.getFullYear() +
+    ' ' + due(d.getHours()) + ':' + due(d.getMinutes());
+}
+
+// Codice unico dell'invio: il server lo usa per non registrare due volte lo
+// stesso rapportino, anche se parte due volte.
 function nuovoIdInvio() {
   return 'v' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
 }
@@ -206,44 +270,209 @@ function riempi(select, lista) {
   select.appendChild(altro);
 }
 
-// ---------- caricamento liste ----------
-fetch(API_URL + '?action=data')
-  .then(function (r) { return r.json(); })
-  .then(function (d) {
-    riempi(el('operatore'), d.operatori);
-    riempi(el('cliente'), d.clienti);
-    riempi(el('varieta'), d.varieta);
-    riempi(el('mezzo'), d.mezzi);
+// ---------- caricamento tendine (con copia di scorta sul telefono) ----------
+function mostraTendine(d) {
+  riempi(el('operatore'), d.operatori);
+  riempi(el('cliente'), d.clienti);
+  riempi(el('varieta'), d.varieta);
+  riempi(el('mezzo'), d.mezzi);
 
-    // Combinata: default "No (da solo)", nessun placeholder
-    var selC = el('combinata');
-    selC.innerHTML = '';
-    var no = document.createElement('option');
-    no.value = 'No (da solo)';
-    no.textContent = 'No (da solo)';
-    no.selected = true;
-    selC.appendChild(no);
-    (d.combinate || []).forEach(function (v) {
-      var o = document.createElement('option');
-      o.value = v;
-      o.textContent = v;
-      selC.appendChild(o);
+  // Combinata: default "No (da solo)", nessun placeholder
+  var selC = el('combinata');
+  selC.innerHTML = '';
+  var no = document.createElement('option');
+  no.value = 'No (da solo)';
+  no.textContent = 'No (da solo)';
+  no.selected = true;
+  selC.appendChild(no);
+  (d.combinate || []).forEach(function (v) {
+    var o = document.createElement('option');
+    o.value = v;
+    o.textContent = v;
+    selC.appendChild(o);
+  });
+  var altro = document.createElement('option');
+  altro.value = ALTRO;
+  altro.textContent = ALTRO;
+  selC.appendChild(altro);
+
+  el('data').value = oggi();
+  el('caricamento').classList.add('nascosto');
+  el('modulo').classList.remove('nascosto');
+}
+
+function caricaTendine() {
+  fetch(API_URL + '?action=data')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || !d.operatori) throw new Error('risposta strana');
+      scrivi(K_LISTE, { dati: d, quando: oraLocale() });
+      mostraTendine(d);
+      el('avvisoListe').classList.add('nascosto');
+    })
+    .catch(function () {
+      var salvate = leggi(K_LISTE, null);
+      if (salvate && salvate.dati) {
+        mostraTendine(salvate.dati);
+        el('avvisoListe').textContent =
+          'Senza rete: elenchi dell’ultimo collegamento (' + salvate.quando + ').';
+        el('avvisoListe').classList.remove('nascosto');
+      } else {
+        el('caricamento').textContent =
+          'Prima volta senza rete: gli elenchi non sono ancora stati scaricati. ' +
+          'Apri la pagina una volta dove c’è campo.';
+      }
     });
-    var altro = document.createElement('option');
-    altro.value = ALTRO;
-    altro.textContent = ALTRO;
-    selC.appendChild(altro);
+}
 
-    el('data').value = oggi();
-    el('caricamento').classList.add('nascosto');
-    el('modulo').classList.remove('nascosto');
-  })
-  .catch(function () {
-    el('caricamento').textContent =
-      'Errore nel caricamento. Controlla la connessione e riapri la pagina.';
+// ---------- coda: il rapportino sta sul telefono finché Google non lo conferma ----------
+function leggiCoda() { return leggi(K_CODA, []); }
+function scriviCoda(c) { scrivi(K_CODA, c); }
+function leggiStorico() { return leggi(K_STORICO, []); }
+
+function inCoda(idInvio) {
+  var c = leggiCoda();
+  for (var i = 0; i < c.length; i++) if (c[i].dati.idInvio === idInvio) return c[i];
+  return null;
+}
+
+function inStorico(idInvio) {
+  var s = leggiStorico();
+  for (var i = 0; i < s.length; i++) if (s[i].idInvio === idInvio) return s[i];
+  return null;
+}
+
+function accodaRapportino(dati) {
+  var c = leggiCoda();
+  c.push({ dati: dati, creatoIl: oraLocale() });
+  scriviCoda(c);
+  aggiornaBarra();
+}
+
+function togliDallaCoda(idInvio) {
+  scriviCoda(leggiCoda().filter(function (x) { return x.dati.idInvio !== idInvio; }));
+}
+
+function segnaConfermato(idInvio, risposta, dati) {
+  var s = leggiStorico();
+  s.unshift({
+    idInvio: idInvio,
+    numero: risposta.numero || '',
+    orario: risposta.orario || oraLocale(),
+    cliente: dati.cliente,
+    ettari: dati.ettari
+  });
+  scrivi(K_STORICO, s.slice(0, 30));
+}
+
+var invioInCorso = false;
+var appenaPartiti = [];   // numeri confermati da poco, mostrati nella barra
+
+// Prova a mandare tutto quello che è in coda, in ordine. Si ferma al primo
+// intoppo: il resto riparte al prossimo tentativo.
+function svuotaCoda() {
+  if (invioInCorso) return Promise.resolve();
+  var coda = leggiCoda();
+  if (!coda.length) { aggiornaBarra(); return Promise.resolve(); }
+
+  invioInCorso = true;
+  aggiornaBarra();
+
+  var catena = Promise.resolve(true);
+  coda.forEach(function (item) {
+    catena = catena.then(function (continua) {
+      if (!continua) return false;
+      return inviaItem(item).then(function () { return true; }, function () { return false; });
+    });
   });
 
-// ---------- costruzione dei pannelli ----------
+  return catena.then(function () {
+    invioInCorso = false;
+    aggiornaBarra();
+  });
+}
+
+function inviaItem(item) {
+  // POST senza header particolari: niente preflight, funziona con Apps Script
+  return fetch(API_URL, { method: 'POST', body: JSON.stringify(item.dati) })
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (!r || !r.ok) {
+        // Il server ha risposto ma rifiuta: non è la rete, è un problema vero.
+        // Tengo il rapportino in coda (nessun dato perso) e lo segnalo.
+        var c = leggiCoda();
+        for (var i = 0; i < c.length; i++) {
+          if (c[i].dati.idInvio === item.dati.idInvio) c[i].errore = (r && r.errore) || 'rifiutato dal sistema';
+        }
+        scriviCoda(c);
+        throw new Error('rifiutato');
+      }
+      togliDallaCoda(item.dati.idInvio);
+      segnaConfermato(item.dati.idInvio, r, item.dati);
+      if (r.numero) appenaPartiti.push(r.numero);
+      aggiornaBarra();
+    });
+}
+
+// ---------- barra di stato in cima ----------
+function aggiornaBarra() {
+  var box = el('stato');
+  var coda = leggiCoda();
+  var conErrore = coda.filter(function (x) { return x.errore; });
+  while (box.firstChild) box.removeChild(box.firstChild);
+
+  if (!coda.length && !appenaPartiti.length) {
+    box.className = 'nascosto';
+    return;
+  }
+
+  if (!coda.length) {
+    box.className = 'inviato';
+    var ok = document.createElement('b');
+    ok.textContent = appenaPartiti.length === 1
+      ? '✔ Inviato adesso: ' + appenaPartiti[0]
+      : '✔ Inviati adesso: ' + appenaPartiti.join(', ');
+    box.appendChild(ok);
+    var q = document.createElement('span');
+    q.textContent = 'Non c’è più niente in attesa sul telefono.';
+    box.appendChild(q);
+    return;
+  }
+
+  box.className = conErrore.length ? 'guasto' : 'attesa';
+  var t = document.createElement('b');
+  if (conErrore.length) {
+    t.textContent = '⚠ Un rapportino non viene accettato dal sistema';
+  } else {
+    t.textContent = coda.length === 1
+      ? '⏳ 1 rapportino salvato sul telefono, in attesa di rete'
+      : '⏳ ' + coda.length + ' rapportini salvati sul telefono, in attesa di rete';
+  }
+  box.appendChild(t);
+
+  var d = document.createElement('span');
+  if (conErrore.length) {
+    d.textContent = conErrore[0].errore + ' — avvisa Federico, i dati restano salvati qui.';
+  } else if (invioInCorso) {
+    d.textContent = 'Invio in corso…';
+  } else if (!HA_MEMORIA) {
+    d.textContent = 'Attenzione: questo browser non salva i dati. Non chiudere la pagina finché non è partito.';
+  } else {
+    d.textContent = 'Partono da soli appena torna il campo. Puoi chiudere l’app.';
+  }
+  box.appendChild(d);
+
+  if (!invioInCorso) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'piccolo';
+    b.textContent = 'Prova a inviarli ora';
+    b.addEventListener('click', function () { svuotaCoda(); });
+    box.appendChild(b);
+  }
+}
+
+// ---------- pannelli ----------
 function svuota(nodo) { while (nodo.firstChild) nodo.removeChild(nodo.firstChild); }
 
 function riga(tab, chiave, valore) {
@@ -260,45 +489,7 @@ function riga(tab, chiave, valore) {
   tab.appendChild(tr);
 }
 
-function mostraPannello() {
-  el('modulo').classList.add('nascosto');
-  el('pannello').classList.remove('nascosto');
-  window.scrollTo(0, 0);
-}
-
-function tornaAlModulo() {
-  el('pannello').classList.add('nascosto');
-  el('pannello').className = 'pannello nascosto';
-  el('modulo').classList.remove('nascosto');
-  window.scrollTo(0, 0);
-}
-
-function mostraConferma(risposta, d) {
-  var p = el('pannello');
-  svuota(p);
-  p.className = 'pannello ok';
-
-  var t = document.createElement('div');
-  t.className = 'p-titolo';
-  t.textContent = risposta.giaRegistrato
-    ? '✔ Era già registrato'
-    : '✔ Rapportino registrato';
-  p.appendChild(t);
-
-  if (risposta.numero) {
-    var n = document.createElement('div');
-    n.className = 'p-numero';
-    n.textContent = risposta.numero;
-    p.appendChild(n);
-  }
-
-  var o = document.createElement('div');
-  o.className = 'p-ora';
-  o.textContent = risposta.orario
-    ? 'Salvato il ' + risposta.orario
-    : 'Salvato correttamente';
-  p.appendChild(o);
-
+function tabellaRiepilogo(d) {
   var tab = document.createElement('table');
   tab.className = 'riepilogo';
   riga(tab, 'Data', dataItaliana(d.data));
@@ -309,13 +500,22 @@ function mostraConferma(risposta, d) {
   riga(tab, 'Ettari', d.ettari);
   riga(tab, 'In combinata con', d.combinata);
   riga(tab, 'Note', d.note);
-  p.appendChild(tab);
+  return tab;
+}
 
-  var nota = document.createElement('div');
-  nota.className = 'p-nota';
-  nota.textContent = 'Se vuoi tenerne traccia, fai uno screenshot di questa schermata.';
-  p.appendChild(nota);
+function mostraPannello() {
+  el('modulo').classList.add('nascosto');
+  el('pannello').classList.remove('nascosto');
+  window.scrollTo(0, 0);
+}
 
+function tornaAlModulo() {
+  el('pannello').className = 'pannello nascosto';
+  el('modulo').classList.remove('nascosto');
+  window.scrollTo(0, 0);
+}
+
+function bottoneNuovo(p) {
   var btn = document.createElement('button');
   btn.type = 'button';
   btn.textContent = 'Nuovo rapportino';
@@ -330,18 +530,82 @@ function mostraConferma(risposta, d) {
     tornaAlModulo();
   });
   p.appendChild(btn);
+}
 
+function mostraConferma(registrazione, d) {
+  var p = el('pannello');
+  svuota(p);
+  p.className = 'pannello ok';
+
+  var t = document.createElement('div');
+  t.className = 'p-titolo';
+  t.textContent = '✔ Rapportino registrato';
+  p.appendChild(t);
+
+  if (registrazione.numero) {
+    var n = document.createElement('div');
+    n.className = 'p-numero';
+    n.textContent = registrazione.numero;
+    p.appendChild(n);
+  }
+
+  var o = document.createElement('div');
+  o.className = 'p-ora';
+  o.textContent = registrazione.orario ? 'Salvato il ' + registrazione.orario : 'Salvato correttamente';
+  p.appendChild(o);
+
+  p.appendChild(tabellaRiepilogo(d));
+
+  var nota = document.createElement('div');
+  nota.className = 'p-nota';
+  nota.textContent = 'Se vuoi tenerne traccia, fai uno screenshot di questa schermata.';
+  p.appendChild(nota);
+
+  bottoneNuovo(p);
   mostraPannello();
 }
 
-function mostraErrore(messaggio, d) {
+function mostraInAttesa(d) {
+  var p = el('pannello');
+  svuota(p);
+  p.className = 'pannello attesa';
+
+  var t = document.createElement('div');
+  t.className = 'p-titolo';
+  t.textContent = '✔ Salvato sul telefono';
+  p.appendChild(t);
+
+  var o = document.createElement('div');
+  o.className = 'p-ora';
+  o.textContent = 'Compilato il ' + oraLocale();
+  p.appendChild(o);
+
+  var m = document.createElement('div');
+  m.className = 'p-testo';
+  m.textContent = 'Manca la rete: partirà da solo appena torna il campo.';
+  p.appendChild(m);
+
+  p.appendChild(tabellaRiepilogo(d));
+
+  var nota = document.createElement('div');
+  nota.className = 'p-nota';
+  nota.textContent = HA_MEMORIA
+    ? 'Puoi chiudere l’app: il rapportino resta salvato qui. Il numero arriverà quando sarà partito.'
+    : 'Attenzione: questo browser non salva i dati. Tieni la pagina aperta finché non torna il campo.';
+  p.appendChild(nota);
+
+  bottoneNuovo(p);
+  mostraPannello();
+}
+
+function mostraErroreServer(messaggio, d) {
   var p = el('pannello');
   svuota(p);
   p.className = 'pannello ko';
 
   var t = document.createElement('div');
   t.className = 'p-titolo';
-  t.textContent = '✕ NON registrato';
+  t.textContent = '⚠ Il sistema non lo accetta';
   p.appendChild(t);
 
   var m = document.createElement('div');
@@ -349,29 +613,19 @@ function mostraErrore(messaggio, d) {
   m.textContent = messaggio;
   p.appendChild(m);
 
+  p.appendChild(tabellaRiepilogo(d));
+
   var nota = document.createElement('div');
   nota.className = 'p-nota';
-  nota.textContent = 'I dati che hai compilato non sono andati persi. ' +
-    'Premi "Riprova invio": se per caso era già arrivato, non verrà registrato due volte.';
+  nota.textContent = 'Il rapportino resta salvato sul telefono e verrà ritentato. ' +
+    'Se continua, avvisa Federico: probabilmente c’è qualcosa da sistemare nel foglio.';
   p.appendChild(nota);
 
-  var btn = document.createElement('button');
-  btn.type = 'button';
-  btn.textContent = 'Riprova invio';
-  btn.addEventListener('click', function () { invia(d); });
-  p.appendChild(btn);
-
-  var btn2 = document.createElement('button');
-  btn2.type = 'button';
-  btn2.className = 'secondario';
-  btn2.textContent = 'Torna al modulo e correggi';
-  btn2.addEventListener('click', tornaAlModulo);
-  p.appendChild(btn2);
-
+  bottoneNuovo(p);
   mostraPannello();
 }
 
-function mostraAttesa() {
+function mostraAttesaInvio() {
   var p = el('pannello');
   svuota(p);
   p.className = 'pannello ok';
@@ -379,33 +633,14 @@ function mostraAttesa() {
   t.className = 'p-titolo';
   t.textContent = 'Invio in corso…';
   p.appendChild(t);
-  var m = document.createElement('div');
-  m.className = 'p-testo';
-  m.textContent = 'Aspetta la conferma prima di chiudere la pagina.';
-  p.appendChild(m);
   mostraPannello();
 }
 
 // ---------- invio ----------
-function invia(d) {
-  mostraAttesa();
-
-  // POST senza header particolari: niente preflight, funziona con Apps Script
-  fetch(API_URL, { method: 'POST', body: JSON.stringify(d) })
-    .then(function (r) { return r.json(); })
-    .then(function (r) {
-      if (!r || !r.ok) throw new Error((r && r.errore) || 'errore');
-      mostraConferma(r, d);
-    })
-    .catch(function () {
-      mostraErrore('Il rapportino non risulta salvato: ' +
-        'la connessione è mancata o il server non ha risposto.', d);
-    });
-}
-
 el('modulo').addEventListener('submit', function (ev) {
   ev.preventDefault();
-  ultimoInvio = {
+
+  var dati = {
     idInvio: nuovoIdInvio(),
     data: el('data').value,
     operatore: el('operatore').value,
@@ -416,8 +651,37 @@ el('modulo').addEventListener('submit', function (ev) {
     combinata: el('combinata').value,
     note: el('note').value.trim()
   };
-  invia(ultimoInvio);
+
+  // PRIMA si salva sul telefono, POI si prova a mandarlo: così non esiste un
+  // istante in cui il rapportino sta solo dentro la pagina aperta.
+  accodaRapportino(dati);
+  mostraAttesaInvio();
+
+  svuotaCoda().then(function () {
+    var reg = inStorico(dati.idInvio);
+    if (reg) return mostraConferma(reg, dati);
+    var ancora = inCoda(dati.idInvio);
+    if (ancora && ancora.errore) return mostraErroreServer(ancora.errore, dati);
+    mostraInAttesa(dati);
+  });
 });
+
+// ---------- avvii automatici ----------
+window.addEventListener('online', function () { appenaPartiti = []; svuotaCoda(); });
+document.addEventListener('visibilitychange', function () {
+  if (!document.hidden) svuotaCoda();
+});
+setInterval(function () {
+  if (leggiCoda().length && navigator.onLine !== false) svuotaCoda();
+}, 45000);
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(function () { /* pagina normale */ });
+}
+
+aggiornaBarra();
+caricaTendine();
+svuotaCoda();
 </script>
 </body>
 </html>

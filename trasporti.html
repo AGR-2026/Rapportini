@@ -4,6 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#1d5c4b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Trasporti">
+<link rel="manifest" href="manifest-trasporti.json">
+<link rel="apple-touch-icon" href="icona-trasporti.png">
 <title>Rapportino Trasporti Uva</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -19,7 +26,7 @@
     font-size: 1.35rem;
     color: #1d5c4b;
     text-align: center;
-    margin: 8px 0 18px;
+    margin: 8px 0 14px;
   }
   .campo { margin-bottom: 16px; }
   label {
@@ -63,20 +70,32 @@
     text-decoration: underline;
     margin-top: 2px;
   }
+  button.piccolo { font-size: 0.95rem; padding: 10px; margin-top: 8px; }
   #contatore {
     text-align: center;
     font-size: 0.85rem;
     color: #6b8279;
-    margin: -8px 0 14px;
-    min-height: 1.2em;
+    margin: -4px 0 12px;
   }
 
-  /* ---------- pannello di conferma / errore ---------- */
+  /* ---------- barra di stato (coda) ---------- */
+  #stato { border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; font-size: 0.92rem; }
+  #stato.attesa { background: #fff4d6; border: 1px solid #d8a800; color: #6b4e00; }
+  #stato.inviato { background: #e2f3e5; border: 1px solid #1c6b2d; color: #1c6b2d; }
+  #stato.guasto { background: #fde8e8; border: 1px solid #a12626; color: #a12626; }
+  #stato b { display: block; margin-bottom: 2px; }
+  #stato button { background: #6b4e00; }
+  #stato.guasto button { background: #a12626; }
+  #avvisoListe { font-size: 0.82rem; color: #6b8279; text-align: center; margin-bottom: 12px; }
+
+  /* ---------- pannello di conferma / attesa / errore ---------- */
   .pannello { border-radius: 14px; padding: 18px 14px; }
   .pannello.ok { background: #e2f3e5; border: 2px solid #1c6b2d; }
+  .pannello.attesa { background: #fff4d6; border: 2px solid #d8a800; }
   .pannello.ko { background: #fde8e8; border: 2px solid #a12626; }
   .p-titolo { text-align: center; font-size: 1.25rem; font-weight: 800; }
   .pannello.ok .p-titolo { color: #1c6b2d; }
+  .pannello.attesa .p-titolo { color: #6b4e00; }
   .pannello.ko .p-titolo { color: #a12626; }
   .p-numero {
     text-align: center;
@@ -87,7 +106,8 @@
     color: #14421f;
   }
   .p-ora { text-align: center; font-size: 0.95rem; color: #3c5a43; margin-bottom: 14px; }
-  .p-testo { text-align: center; font-size: 1rem; margin: 10px 0 4px; }
+  .pannello.attesa .p-ora { color: #6b4e00; }
+  .p-testo { text-align: center; font-size: 1rem; margin: 10px 0 12px; }
   .riepilogo {
     width: 100%;
     border-collapse: collapse;
@@ -100,12 +120,15 @@
   .riepilogo td.k { color: #5c5c5c; width: 42%; }
   .riepilogo td.v { font-weight: 700; word-break: break-word; }
   .p-nota { text-align: center; font-size: 0.85rem; color: #4a5c4e; margin-top: 12px; }
+  .pannello.attesa .p-nota { color: #6b4e00; }
   .p-lista { margin-top: 14px; font-size: 0.85rem; color: #3c5a43; }
   .p-lista b { display: block; margin-bottom: 4px; }
   .p-lista div.v { padding: 2px 0; }
   .pannello.ok button { background: #1c6b2d; }
+  .pannello.attesa button { background: #8a6500; }
   .pannello.ko button { background: #a12626; }
   .pannello.ok button.secondario { background: none; color: #3c5a43; }
+  .pannello.attesa button.secondario { background: none; color: #6b4e00; }
   .pannello.ko button.secondario { background: none; color: #a12626; }
 
   #caricamento { text-align: center; color: #6b8279; padding: 30px 0; }
@@ -115,8 +138,9 @@
 
 <h1>🚜 Rapportino Trasporti Uva</h1>
 
+<div id="stato" class="nascosto"></div>
 <div id="caricamento">Caricamento liste…</div>
-
+<div id="avvisoListe" class="nascosto"></div>
 <div id="contatore"></div>
 
 <form id="modulo" class="nascosto" autocomplete="off">
@@ -182,10 +206,41 @@ var API_URL = 'https://script.google.com/macros/s/AKfycbwFxoChLKvcKhhRhFDZiE9Zk9
 // ============================================================
 
 var ALTRO = 'Altro (spiego nelle note)';
-var registrati = [];   // viaggi confermati da quando si è aperta la pagina
+var K_CODA = 'trasporti_coda';        // viaggi compilati e non ancora arrivati a Google
+var K_LISTE = 'trasporti_liste';      // ultime tendine scaricate (per aprire senza rete)
+var K_STORICO = 'trasporti_storico';  // ultimi viaggi confermati, con il loro numero
 
 function el(id) { return document.getElementById(id); }
 
+// ---------- memoria del telefono ----------
+// Se il browser non la concede (navigazione privata), si continua a lavorare in
+// memoria volatile: la pagina avvisa che la coda dura solo finché resta aperta.
+var HA_MEMORIA = (function () {
+  try {
+    localStorage.setItem('__prova__', '1');
+    localStorage.removeItem('__prova__');
+    return true;
+  } catch (e) { return false; }
+})();
+var memoriaVolatile = {};
+
+function leggi(chiave, seVuoto) {
+  try {
+    if (HA_MEMORIA) {
+      var v = localStorage.getItem(chiave);
+      return v ? JSON.parse(v) : seVuoto;
+    }
+  } catch (e) { /* cado sotto */ }
+  return (chiave in memoriaVolatile) ? memoriaVolatile[chiave] : seVuoto;
+}
+
+function scrivi(chiave, valore) {
+  memoriaVolatile[chiave] = valore;
+  if (!HA_MEMORIA) return;
+  try { localStorage.setItem(chiave, JSON.stringify(valore)); } catch (e) { /* pieno: resta in memoria */ }
+}
+
+// ---------- utilità ----------
 // Data di OGGI secondo l'orologio del telefono.
 // (toISOString darebbe l'ora di Londra: dopo mezzanotte scriverebbe ieri)
 function oggi() {
@@ -197,8 +252,15 @@ function oggi() {
   return d.getFullYear() + '-' + m + '-' + g;
 }
 
-// Codice unico di questo invio: se l'autista preme "Riprova" dopo un errore
-// di rete, il server lo riconosce e NON scrive il viaggio due volte.
+function oraLocale(d) {
+  d = d || new Date();
+  function due(n) { return (n < 10 ? '0' : '') + n; }
+  return due(d.getDate()) + '/' + due(d.getMonth() + 1) + '/' + d.getFullYear() +
+    ' ' + due(d.getHours()) + ':' + due(d.getMinutes());
+}
+
+// Codice unico dell'invio: il server lo usa per non registrare due volte lo
+// stesso viaggio, anche se parte due volte.
 function nuovoIdInvio() {
   return 't' + Date.now() + '-' + Math.floor(Math.random() * 1e6);
 }
@@ -229,34 +291,209 @@ function riempi(select, lista) {
   select.appendChild(altro);
 }
 
-function aggiornaContatore() {
-  el('contatore').textContent = registrati.length === 0 ? '' :
-    (registrati.length === 1
-      ? '1 viaggio registrato da quando hai aperto la pagina'
-      : registrati.length + ' viaggi registrati da quando hai aperto la pagina');
+// ---------- caricamento tendine (con copia di scorta sul telefono) ----------
+function mostraTendine(d) {
+  riempi(el('cliente'), d.clienti);
+  riempi(el('varieta'), d.varieta);
+  riempi(el('operatore'), d.operatori);
+  riempi(el('trattore'), d.trattori);
+  riempi(el('rimorchio'), d.rimorchi);
+  riempi(el('destinazione'), d.destinazioni);
+
+  el('data').value = oggi();
+  el('caricamento').classList.add('nascosto');
+  el('modulo').classList.remove('nascosto');
 }
 
-// ---------- caricamento liste ----------
-fetch(API_URL + '?action=data')
-  .then(function (r) { return r.json(); })
-  .then(function (d) {
-    riempi(el('cliente'), d.clienti);
-    riempi(el('varieta'), d.varieta);
-    riempi(el('operatore'), d.operatori);
-    riempi(el('trattore'), d.trattori);
-    riempi(el('rimorchio'), d.rimorchi);
-    riempi(el('destinazione'), d.destinazioni);
+function caricaTendine() {
+  fetch(API_URL + '?action=data')
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      if (!d || !d.clienti) throw new Error('risposta strana');
+      scrivi(K_LISTE, { dati: d, quando: oraLocale() });
+      mostraTendine(d);
+      el('avvisoListe').classList.add('nascosto');
+    })
+    .catch(function () {
+      var salvate = leggi(K_LISTE, null);
+      if (salvate && salvate.dati) {
+        mostraTendine(salvate.dati);
+        el('avvisoListe').textContent =
+          'Senza rete: elenchi dell’ultimo collegamento (' + salvate.quando + ').';
+        el('avvisoListe').classList.remove('nascosto');
+      } else {
+        el('caricamento').textContent =
+          'Prima volta senza rete: gli elenchi non sono ancora stati scaricati. ' +
+          'Apri la pagina una volta dove c’è campo.';
+      }
+    });
+}
 
-    el('data').value = oggi();
-    el('caricamento').classList.add('nascosto');
-    el('modulo').classList.remove('nascosto');
-  })
-  .catch(function () {
-    el('caricamento').textContent =
-      'Errore nel caricamento. Controlla la connessione e riapri la pagina.';
+// ---------- coda: il viaggio sta sul telefono finché Google non lo conferma ----------
+function leggiCoda() { return leggi(K_CODA, []); }
+function scriviCoda(c) { scrivi(K_CODA, c); }
+function leggiStorico() { return leggi(K_STORICO, []); }
+
+function inCoda(idInvio) {
+  var c = leggiCoda();
+  for (var i = 0; i < c.length; i++) if (c[i].dati.idInvio === idInvio) return c[i];
+  return null;
+}
+
+function inStorico(idInvio) {
+  var s = leggiStorico();
+  for (var i = 0; i < s.length; i++) if (s[i].idInvio === idInvio) return s[i];
+  return null;
+}
+
+function accodaTrasporto(dati) {
+  var c = leggiCoda();
+  c.push({ dati: dati, creatoIl: oraLocale() });
+  scriviCoda(c);
+  aggiornaBarra();
+}
+
+function togliDallaCoda(idInvio) {
+  scriviCoda(leggiCoda().filter(function (x) { return x.dati.idInvio !== idInvio; }));
+}
+
+function segnaConfermato(idInvio, risposta, dati) {
+  var s = leggiStorico();
+  s.unshift({
+    idInvio: idInvio,
+    numero: risposta.numero || '',
+    orario: risposta.orario || oraLocale(),
+    quintali: dati.quintali,
+    destinazione: dati.destinazione
+  });
+  scrivi(K_STORICO, s.slice(0, 30));
+}
+
+var invioInCorso = false;
+var appenaPartiti = [];   // numeri confermati da poco, mostrati nella barra
+var confermatiOggi = [];  // viaggi confermati da quando si è aperta la pagina
+
+// Prova a mandare tutto quello che è in coda, in ordine. Si ferma al primo
+// intoppo: il resto riparte al prossimo tentativo.
+function svuotaCoda() {
+  if (invioInCorso) return Promise.resolve();
+  var coda = leggiCoda();
+  if (!coda.length) { aggiornaBarra(); return Promise.resolve(); }
+
+  invioInCorso = true;
+  aggiornaBarra();
+
+  var catena = Promise.resolve(true);
+  coda.forEach(function (item) {
+    catena = catena.then(function (continua) {
+      if (!continua) return false;
+      return inviaItem(item).then(function () { return true; }, function () { return false; });
+    });
   });
 
-// ---------- costruzione dei pannelli ----------
+  return catena.then(function () {
+    invioInCorso = false;
+    aggiornaBarra();
+  });
+}
+
+function inviaItem(item) {
+  // POST senza header particolari: niente preflight, funziona con Apps Script
+  return fetch(API_URL, { method: 'POST', body: JSON.stringify(item.dati) })
+    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (!r || !r.ok) {
+        // Il server ha risposto ma rifiuta: non è la rete, è un problema vero.
+        // Tengo il viaggio in coda (nessun dato perso) e lo segnalo.
+        var c = leggiCoda();
+        for (var i = 0; i < c.length; i++) {
+          if (c[i].dati.idInvio === item.dati.idInvio) c[i].errore = (r && r.errore) || 'rifiutato dal sistema';
+        }
+        scriviCoda(c);
+        throw new Error('rifiutato');
+      }
+      togliDallaCoda(item.dati.idInvio);
+      segnaConfermato(item.dati.idInvio, r, item.dati);
+      if (r.numero) appenaPartiti.push(r.numero);
+      if (!confermatiOggi.some(function (v) { return v.idInvio === item.dati.idInvio; })) {
+        confermatiOggi.push({
+          idInvio: item.dati.idInvio,
+          numero: r.numero,
+          quintali: item.dati.quintali,
+          destinazione: item.dati.destinazione
+        });
+      }
+      aggiornaContatore();
+      aggiornaBarra();
+    });
+}
+
+function aggiornaContatore() {
+  var n = confermatiOggi.length;
+  el('contatore').textContent = n === 0 ? '' :
+    (n === 1 ? '1 viaggio registrato da quando hai aperto la pagina'
+             : n + ' viaggi registrati da quando hai aperto la pagina');
+}
+
+// ---------- barra di stato in cima ----------
+function aggiornaBarra() {
+  var box = el('stato');
+  var coda = leggiCoda();
+  var conErrore = coda.filter(function (x) { return x.errore; });
+  while (box.firstChild) box.removeChild(box.firstChild);
+
+  if (!coda.length && !appenaPartiti.length) {
+    box.className = 'nascosto';
+    return;
+  }
+
+  if (!coda.length) {
+    box.className = 'inviato';
+    var ok = document.createElement('b');
+    ok.textContent = appenaPartiti.length === 1
+      ? '✔ Inviato adesso: ' + appenaPartiti[0]
+      : '✔ Inviati adesso: ' + appenaPartiti.join(', ');
+    box.appendChild(ok);
+    var q = document.createElement('span');
+    q.textContent = 'Non c’è più niente in attesa sul telefono.';
+    box.appendChild(q);
+    return;
+  }
+
+  box.className = conErrore.length ? 'guasto' : 'attesa';
+  var t = document.createElement('b');
+  if (conErrore.length) {
+    t.textContent = '⚠ Un viaggio non viene accettato dal sistema';
+  } else {
+    t.textContent = coda.length === 1
+      ? '⏳ 1 viaggio salvato sul telefono, in attesa di rete'
+      : '⏳ ' + coda.length + ' viaggi salvati sul telefono, in attesa di rete';
+  }
+  box.appendChild(t);
+
+  var d = document.createElement('span');
+  if (conErrore.length) {
+    d.textContent = conErrore[0].errore + ' — avvisa Federico, i dati restano salvati qui.';
+  } else if (invioInCorso) {
+    d.textContent = 'Invio in corso…';
+  } else if (!HA_MEMORIA) {
+    d.textContent = 'Attenzione: questo browser non salva i dati. Non chiudere la pagina finché non è partito.';
+  } else {
+    d.textContent = 'Partono da soli appena torna il campo. Puoi chiudere l’app.';
+  }
+  box.appendChild(d);
+
+  if (!invioInCorso) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'piccolo';
+    b.textContent = 'Prova a inviarli ora';
+    b.addEventListener('click', function () { svuotaCoda(); });
+    box.appendChild(b);
+  }
+}
+
+// ---------- pannelli ----------
 function svuota(nodo) { while (nodo.firstChild) nodo.removeChild(nodo.firstChild); }
 
 function riga(tab, chiave, valore) {
@@ -273,6 +510,21 @@ function riga(tab, chiave, valore) {
   tab.appendChild(tr);
 }
 
+function tabellaRiepilogo(d) {
+  var tab = document.createElement('table');
+  tab.className = 'riepilogo';
+  riga(tab, 'Data', dataItaliana(d.data));
+  riga(tab, 'Cliente', d.cliente);
+  riga(tab, 'Varietà', d.varieta);
+  riga(tab, 'Operatore', d.operatore);
+  riga(tab, 'Trattore', d.trattore);
+  riga(tab, 'Rimorchio', d.rimorchio);
+  riga(tab, 'Destinazione', d.destinazione);
+  riga(tab, 'Quintali', d.quintali);
+  riga(tab, 'Note', d.note);
+  return tab;
+}
+
 function mostraPannello() {
   el('modulo').classList.add('nascosto');
   el('pannello').classList.remove('nascosto');
@@ -285,66 +537,7 @@ function tornaAlModulo() {
   window.scrollTo(0, 0);
 }
 
-function mostraConferma(risposta, d) {
-  var p = el('pannello');
-  svuota(p);
-  p.className = 'pannello ok';
-
-  var t = document.createElement('div');
-  t.className = 'p-titolo';
-  t.textContent = risposta.giaRegistrato
-    ? '✔ Era già registrato'
-    : '✔ Trasporto registrato';
-  p.appendChild(t);
-
-  if (risposta.numero) {
-    var n = document.createElement('div');
-    n.className = 'p-numero';
-    n.textContent = risposta.numero;
-    p.appendChild(n);
-  }
-
-  var o = document.createElement('div');
-  o.className = 'p-ora';
-  o.textContent = risposta.orario
-    ? 'Salvato il ' + risposta.orario
-    : 'Salvato correttamente';
-  p.appendChild(o);
-
-  var tab = document.createElement('table');
-  tab.className = 'riepilogo';
-  riga(tab, 'Data', dataItaliana(d.data));
-  riga(tab, 'Cliente', d.cliente);
-  riga(tab, 'Varietà', d.varieta);
-  riga(tab, 'Operatore', d.operatore);
-  riga(tab, 'Trattore', d.trattore);
-  riga(tab, 'Rimorchio', d.rimorchio);
-  riga(tab, 'Destinazione', d.destinazione);
-  riga(tab, 'Quintali', d.quintali);
-  riga(tab, 'Note', d.note);
-  p.appendChild(tab);
-
-  // elenco dei viaggi già confermati in questa sessione: una piccola "ricevuta"
-  if (registrati.length > 1) {
-    var box = document.createElement('div');
-    box.className = 'p-lista';
-    var tit = document.createElement('b');
-    tit.textContent = 'Viaggi registrati da quando hai aperto la pagina:';
-    box.appendChild(tit);
-    registrati.forEach(function (v) {
-      var r = document.createElement('div');
-      r.className = 'v';
-      r.textContent = '• ' + (v.numero || '—') + ' — ' + v.quintali + ' q.li a ' + v.destinazione;
-      box.appendChild(r);
-    });
-    p.appendChild(box);
-  }
-
-  var nota = document.createElement('div');
-  nota.className = 'p-nota';
-  nota.textContent = 'Se vuoi tenerne traccia, fai uno screenshot di questa schermata.';
-  p.appendChild(nota);
-
+function bottoniNuovoViaggio(p) {
   var btn = document.createElement('button');
   btn.type = 'button';
   btn.textContent = 'Nuovo viaggio';
@@ -369,18 +562,99 @@ function mostraConferma(risposta, d) {
     tornaAlModulo();
   });
   p.appendChild(btn2);
+}
 
+function elencoViaggi(p) {
+  if (confermatiOggi.length < 2) return;
+  var box = document.createElement('div');
+  box.className = 'p-lista';
+  var tit = document.createElement('b');
+  tit.textContent = 'Viaggi registrati da quando hai aperto la pagina:';
+  box.appendChild(tit);
+  confermatiOggi.forEach(function (v) {
+    var r = document.createElement('div');
+    r.className = 'v';
+    r.textContent = '• ' + (v.numero || '—') + ' — ' + v.quintali + ' q.li a ' + v.destinazione;
+    box.appendChild(r);
+  });
+  p.appendChild(box);
+}
+
+function mostraConferma(registrazione, d) {
+  var p = el('pannello');
+  svuota(p);
+  p.className = 'pannello ok';
+
+  var t = document.createElement('div');
+  t.className = 'p-titolo';
+  t.textContent = '✔ Trasporto registrato';
+  p.appendChild(t);
+
+  if (registrazione.numero) {
+    var n = document.createElement('div');
+    n.className = 'p-numero';
+    n.textContent = registrazione.numero;
+    p.appendChild(n);
+  }
+
+  var o = document.createElement('div');
+  o.className = 'p-ora';
+  o.textContent = registrazione.orario ? 'Salvato il ' + registrazione.orario : 'Salvato correttamente';
+  p.appendChild(o);
+
+  p.appendChild(tabellaRiepilogo(d));
+  elencoViaggi(p);
+
+  var nota = document.createElement('div');
+  nota.className = 'p-nota';
+  nota.textContent = 'Se vuoi tenerne traccia, fai uno screenshot di questa schermata.';
+  p.appendChild(nota);
+
+  bottoniNuovoViaggio(p);
   mostraPannello();
 }
 
-function mostraErrore(messaggio, d) {
+function mostraInAttesa(d) {
+  var p = el('pannello');
+  svuota(p);
+  p.className = 'pannello attesa';
+
+  var t = document.createElement('div');
+  t.className = 'p-titolo';
+  t.textContent = '✔ Salvato sul telefono';
+  p.appendChild(t);
+
+  var o = document.createElement('div');
+  o.className = 'p-ora';
+  o.textContent = 'Compilato il ' + oraLocale();
+  p.appendChild(o);
+
+  var m = document.createElement('div');
+  m.className = 'p-testo';
+  m.textContent = 'Manca la rete: partirà da solo appena torna il campo.';
+  p.appendChild(m);
+
+  p.appendChild(tabellaRiepilogo(d));
+
+  var nota = document.createElement('div');
+  nota.className = 'p-nota';
+  nota.textContent = HA_MEMORIA
+    ? 'Puoi chiudere l’app: il viaggio resta salvato qui. Il numero arriverà quando sarà partito.'
+    : 'Attenzione: questo browser non salva i dati. Tieni la pagina aperta finché non torna il campo.';
+  p.appendChild(nota);
+
+  bottoniNuovoViaggio(p);
+  mostraPannello();
+}
+
+function mostraErroreServer(messaggio, d) {
   var p = el('pannello');
   svuota(p);
   p.className = 'pannello ko';
 
   var t = document.createElement('div');
   t.className = 'p-titolo';
-  t.textContent = '✕ NON registrato';
+  t.textContent = '⚠ Il sistema non lo accetta';
   p.appendChild(t);
 
   var m = document.createElement('div');
@@ -388,29 +662,19 @@ function mostraErrore(messaggio, d) {
   m.textContent = messaggio;
   p.appendChild(m);
 
+  p.appendChild(tabellaRiepilogo(d));
+
   var nota = document.createElement('div');
   nota.className = 'p-nota';
-  nota.textContent = 'I dati che hai compilato non sono andati persi. ' +
-    'Premi "Riprova invio": se per caso era già arrivato, non verrà registrato due volte.';
+  nota.textContent = 'Il viaggio resta salvato sul telefono e verrà ritentato. ' +
+    'Se continua, avvisa Federico: probabilmente c’è qualcosa da sistemare nel foglio.';
   p.appendChild(nota);
 
-  var btn = document.createElement('button');
-  btn.type = 'button';
-  btn.textContent = 'Riprova invio';
-  btn.addEventListener('click', function () { invia(d); });
-  p.appendChild(btn);
-
-  var btn2 = document.createElement('button');
-  btn2.type = 'button';
-  btn2.className = 'secondario';
-  btn2.textContent = 'Torna al modulo e correggi';
-  btn2.addEventListener('click', tornaAlModulo);
-  p.appendChild(btn2);
-
+  bottoniNuovoViaggio(p);
   mostraPannello();
 }
 
-function mostraAttesa() {
+function mostraAttesaInvio() {
   var p = el('pannello');
   svuota(p);
   p.className = 'pannello ok';
@@ -418,44 +682,14 @@ function mostraAttesa() {
   t.className = 'p-titolo';
   t.textContent = 'Invio in corso…';
   p.appendChild(t);
-  var m = document.createElement('div');
-  m.className = 'p-testo';
-  m.textContent = 'Aspetta la conferma prima di chiudere la pagina.';
-  p.appendChild(m);
   mostraPannello();
 }
 
 // ---------- invio ----------
-function invia(d) {
-  mostraAttesa();
-
-  // POST senza header particolari: niente preflight, funziona con Apps Script
-  fetch(API_URL, { method: 'POST', body: JSON.stringify(d) })
-    .then(function (r) { return r.json(); })
-    .then(function (r) {
-      if (!r || !r.ok) throw new Error((r && r.errore) || 'errore');
-      // se è un "Riprova" andato a buon fine, non conto due volte lo stesso viaggio
-      var gia = registrati.some(function (v) { return v.idInvio === d.idInvio; });
-      if (!gia) {
-        registrati.push({
-          idInvio: d.idInvio,
-          numero: r.numero,
-          quintali: d.quintali,
-          destinazione: d.destinazione
-        });
-      }
-      aggiornaContatore();
-      mostraConferma(r, d);
-    })
-    .catch(function () {
-      mostraErrore('Il trasporto non risulta salvato: ' +
-        'la connessione è mancata o il server non ha risposto.', d);
-    });
-}
-
 el('modulo').addEventListener('submit', function (ev) {
   ev.preventDefault();
-  invia({
+
+  var dati = {
     idInvio: nuovoIdInvio(),
     data: el('data').value,
     cliente: el('cliente').value,
@@ -466,6 +700,19 @@ el('modulo').addEventListener('submit', function (ev) {
     destinazione: el('destinazione').value,
     quintali: el('quintali').value,
     note: el('note').value.trim()
+  };
+
+  // PRIMA si salva sul telefono, POI si prova a mandarlo: così non esiste un
+  // istante in cui il viaggio sta solo dentro la pagina aperta.
+  accodaTrasporto(dati);
+  mostraAttesaInvio();
+
+  svuotaCoda().then(function () {
+    var reg = inStorico(dati.idInvio);
+    if (reg) return mostraConferma(reg, dati);
+    var ancora = inCoda(dati.idInvio);
+    if (ancora && ancora.errore) return mostraErroreServer(ancora.errore, dati);
+    mostraInAttesa(dati);
   });
 });
 
@@ -476,10 +723,27 @@ el('azzera').addEventListener('click', function () {
   el('quintali').value = '';
   el('note').value = '';
   el('data').value = oggi();
-  registrati = [];
+  confermatiOggi = [];
   aggiornaContatore();
   window.scrollTo(0, 0);
 });
+
+// ---------- avvii automatici ----------
+window.addEventListener('online', function () { appenaPartiti = []; svuotaCoda(); });
+document.addEventListener('visibilitychange', function () {
+  if (!document.hidden) svuotaCoda();
+});
+setInterval(function () {
+  if (leggiCoda().length && navigator.onLine !== false) svuotaCoda();
+}, 45000);
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(function () { /* pagina normale */ });
+}
+
+aggiornaBarra();
+caricaTendine();
+svuotaCoda();
 </script>
 </body>
 </html>

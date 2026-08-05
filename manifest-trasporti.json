@@ -1,0 +1,14 @@
+{
+  "name": "Rapportino Trasporti Uva",
+  "short_name": "Trasporti",
+  "start_url": "trasporti.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f1f5f2",
+  "theme_color": "#1d5c4b",
+  "lang": "it",
+  "icons": [
+    { "src": "icona-trasporti.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
